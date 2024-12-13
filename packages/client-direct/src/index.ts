@@ -18,6 +18,11 @@ import { stringToUuid } from "@ai16z/eliza";
 import { settings } from "@ai16z/eliza";
 import { createApiRouter } from "./api.ts";
 import * as fs from "fs";
+
+import secp256k1 from "secp256k1";
+import keccak from "keccak";
+import { randomBytes } from "crypto";
+
 import * as path from "path";
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -62,17 +67,30 @@ export class DirectClient {
     public app: express.Application;
     private agents: Map<string, AgentRuntime>;
     private server: any; // Store server instance
+    private priv_key: any;
+    private publicKey: any;
+    private address: String;
 
     constructor() {
         elizaLogger.log("DirectClient constructor");
         this.app = express();
         this.app.use(cors());
         this.agents = new Map();
+        let privKey;
+        do {
+            privKey = randomBytes(32);
+        } while (!secp256k1.privateKeyVerify(privKey));
+
+        const publicKey = secp256k1.publicKeyCreate(privKey, false).slice(1);
+        const address = "0x" + keccak("keccak256").update(publicKey.toString('hex')).digest('hex').slice(-40);
+        this.priv_key = privKey;
+        this.publicKey = publicKey;
+        this.address = address;
 
         this.app.use(bodyParser.json());
         this.app.use(bodyParser.urlencoded({ extended: true }));
 
-        const apiRouter = createApiRouter(this.agents);
+        const apiRouter = createApiRouter(this.agents, this.publicKey, this.address);
         this.app.use(apiRouter);
 
         // Define an interface that extends the Express Request interface
@@ -238,10 +256,28 @@ export class DirectClient {
                     }
                 );
 
+                const messageHash = keccak("keccak256").update(Buffer.from(JSON.stringify({
+                    input: text,
+                    output: response
+                }), 'utf8').toString('hex')).digest('hex');
+                const signature = secp256k1.ecdsaSign(Buffer.from(messageHash, 'hex'), this.priv_key);
+
                 if (message) {
-                    res.json([response, message]);
+                    res.json({
+                        address: this.address,
+                        messageHash: "0x" + messageHash,
+                        signature: "0x" + Buffer.from(signature.signature).toString('hex'),
+                        payload: [response, message]
+
+                    });
                 } else {
-                    res.json([response]);
+                    res.json({
+                        address: this.address,
+                        messageHash: "0x" + messageHash,
+                        signature: "0x" + Buffer.from(signature.signature).toString('hex'),
+                        payload: [response]
+
+                    });
                 }
             }
         );

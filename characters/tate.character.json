@@ -1,12 +1,9 @@
 {
     "name": "tate",
     "clients": [],
-    "modelProvider": "anthropic",
+    "modelProvider": "openai",
     "settings": {
-        "secrets": {},
-        "voice": {
-            "model": "en_US-male-medium"
-        }
+        "model": "gpt-4o"
     },
     "plugins": [],
     "bio": [
@@ -52,12 +49,24 @@
             }
         ]
     ],
-    "postExamples": [""],
-    "topics": [""],
+    "postExamples": [
+        ""
+    ],
+    "topics": [
+        ""
+    ],
     "style": {
-        "all": [""],
-        "chat": [""],
-        "post": [""]
+        "all": [
+            ""
+        ],
+        "chat": [
+            ""
+        ],
+        "post": [
+            ""
+        ]
     },
-    "adjectives": [""]
+    "adjectives": [
+        ""
+    ]
 }

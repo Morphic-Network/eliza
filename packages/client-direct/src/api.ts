@@ -5,8 +5,9 @@ import cors from "cors";
 import { AgentRuntime } from "@ai16z/eliza";
 
 import { REST, Routes } from "discord.js";
+import { TappdClient } from "@phala/dstack-sdk";
 
-export function createApiRouter(agents: Map<string, AgentRuntime>) {
+export function createApiRouter(agents: Map<string, AgentRuntime>, pubkey, address: String) {
     const router = express.Router();
 
     router.use(cors());
@@ -23,6 +24,24 @@ export function createApiRouter(agents: Map<string, AgentRuntime>) {
             name: agent.character.name,
         }));
         res.json({ agents: agentsList });
+    });
+
+    router.get("/agents/:agentId/quote", async (req, res) => {
+        const agentId = req.params.agentId;
+        const runtime = agents.get(agentId);
+
+        if (!runtime) {
+            res.status(404).json({ error: "Runtime not found" });
+            return;
+        }
+
+        let tdx_quote = await new TappdClient().tdxQuote(pubkey);
+        res.json({
+            pubkey: Buffer.from(pubkey).toString('hex'),
+            address: address,
+            quote: tdx_quote.quote,
+            event_log: tdx_quote.event_log
+        })
     });
 
     router.get("/agents/:agentId", (req, res) => {

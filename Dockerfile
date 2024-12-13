@@ -22,6 +22,7 @@ COPY agent ./agent
 COPY packages ./packages
 COPY scripts ./scripts
 COPY characters ./characters
+COPY docs ./docs
 
 # Install dependencies and build the project
 RUN pnpm install \
@@ -52,4 +53,4 @@ COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/characters ./characters
 
 # Set the command to run the application
-CMD ["pnpm", "start", "--non-interactive"]
+CMD ["pnpm", "start", "--non-interactive", "--characters=characters/tate.character.json"]
