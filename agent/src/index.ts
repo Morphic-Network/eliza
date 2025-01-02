@@ -28,6 +28,7 @@ import { zgPlugin } from "@ai16z/plugin-0g";
 import { goatPlugin } from "@ai16z/plugin-goat";
 import { bootstrapPlugin } from "@ai16z/plugin-bootstrap";
 // import { buttplugPlugin } from "@ai16z/plugin-buttplug";
+import { arxivPlugin } from "@ai16z/plugin-arxiv";
 import {
     coinbaseCommercePlugin,
     coinbaseMassPaymentsPlugin,
@@ -373,54 +374,63 @@ export function createAgent(
 
     nodePlugin ??= createNodePlugin();
 
+    console.log("Loading plugins for character:", character.name);
+    const plugins = [
+        bootstrapPlugin,
+        arxivPlugin, // Always enable arXiv plugin as it doesn't require API key
+        getSecret(character, "CONFLUX_CORE_PRIVATE_KEY") ? confluxPlugin : null,
+        nodePlugin,
+        getSecret(character, "SOLANA_PUBLIC_KEY") ||
+        (getSecret(character, "WALLET_PUBLIC_KEY") &&
+            !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
+            ? solanaPlugin
+            : null,
+        getSecret(character, "EVM_PRIVATE_KEY") ||
+        (getSecret(character, "WALLET_PUBLIC_KEY") &&
+            !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
+            ? evmPlugin
+            : null,
+        getSecret(character, "ZEROG_PRIVATE_KEY") ? zgPlugin : null,
+        getSecret(character, "COINBASE_COMMERCE_KEY")
+            ? coinbaseCommercePlugin
+            : null,
+        getSecret(character, "FAL_API_KEY") ||
+        getSecret(character, "OPENAI_API_KEY") ||
+        getSecret(character, "HEURIST_API_KEY")
+            ? imageGenerationPlugin
+            : null,
+        ...(getSecret(character, "COINBASE_API_KEY") &&
+        getSecret(character, "COINBASE_PRIVATE_KEY")
+            ? [
+                  coinbaseMassPaymentsPlugin,
+                  tradePlugin,
+                  tokenContractPlugin,
+                  advancedTradePlugin,
+              ]
+            : []),
+        getSecret(character, "COINBASE_API_KEY") &&
+        getSecret(character, "COINBASE_PRIVATE_KEY") &&
+        getSecret(character, "COINBASE_NOTIFICATION_URI")
+            ? webhookPlugin
+            : null,
+        getSecret(character, "WALLET_SECRET_SALT") ? teePlugin : null,
+        getSecret(character, "ALCHEMY_API_KEY") ? goatPlugin : null,
+        getSecret(character, "FLOW_ADDRESS") &&
+        getSecret(character, "FLOW_PRIVATE_KEY")
+            ? flowPlugin
+            : null,
+        getSecret(character, "APTOS_PRIVATE_KEY") ? aptosPlugin : null,
+    ].filter(Boolean);
+
+    console.log("Plugins loaded for character:", character.name, plugins);
+
     return new AgentRuntime({
         databaseAdapter: db,
         token,
         modelProvider: character.modelProvider,
         evaluators: [],
         character,
-        plugins: [
-            bootstrapPlugin,
-            getSecret(character, "CONFLUX_CORE_PRIVATE_KEY")
-                ? confluxPlugin
-                : null,
-            nodePlugin,
-            getSecret(character, "SOLANA_PUBLIC_KEY") ||
-            (getSecret(character, "WALLET_PUBLIC_KEY") &&
-                !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
-                ? solanaPlugin
-                : null,
-            getSecret(character, "EVM_PRIVATE_KEY") ||
-            (getSecret(character, "WALLET_PUBLIC_KEY") &&
-                !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
-                ? evmPlugin
-                : null,
-            getSecret(character, "ZEROG_PRIVATE_KEY") ? zgPlugin : null,
-            getSecret(character, "COINBASE_COMMERCE_KEY")
-                ? coinbaseCommercePlugin
-                : null,
-            getSecret(character, "FAL_API_KEY") ||
-            getSecret(character, "OPENAI_API_KEY") ||
-            getSecret(character, "HEURIST_API_KEY")
-                ? imageGenerationPlugin
-                : null,
-            ...(getSecret(character, "COINBASE_API_KEY") &&
-            getSecret(character, "COINBASE_PRIVATE_KEY")
-                ? [coinbaseMassPaymentsPlugin, tradePlugin, tokenContractPlugin, advancedTradePlugin]
-                : []),
-            getSecret(character, "COINBASE_API_KEY") &&
-            getSecret(character, "COINBASE_PRIVATE_KEY") &&
-            getSecret(character, "COINBASE_NOTIFICATION_URI")
-                ? webhookPlugin
-                : null,
-            getSecret(character, "WALLET_SECRET_SALT") ? teePlugin : null,
-            getSecret(character, "ALCHEMY_API_KEY") ? goatPlugin : null,
-            getSecret(character, "FLOW_ADDRESS") &&
-            getSecret(character, "FLOW_PRIVATE_KEY")
-                ? flowPlugin
-                : null,
-            getSecret(character, "APTOS_PRIVATE_KEY") ? aptosPlugin : null,
-        ].filter(Boolean),
+        plugins,
         providers: [],
         actions: [],
         services: [],
@@ -535,6 +545,7 @@ async function handleUserInput(input, agentId) {
 
     try {
         const serverPort = parseInt(settings.SERVER_PORT || "3000");
+        console.log("Using agentId:", agentId);
 
         const response = await fetch(
             `http://localhost:${serverPort}/${agentId}/message`,
@@ -545,14 +556,27 @@ async function handleUserInput(input, agentId) {
                     text: input,
                     userId: "user",
                     userName: "User",
+                    agentId: agentId,
                 }),
             }
         );
 
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
         const data = await response.json();
-        data.forEach((message) =>
-            elizaLogger.log(`${"Agent"}: ${message.text}`)
-        );
+        console.log("Response data:", data);
+
+        if (Array.isArray(data)) {
+            data.forEach((message) =>
+                elizaLogger.log(`${"Agent"}: ${message.text}`)
+            );
+        } else if (data && typeof data === "object") {
+            elizaLogger.log(`${"Agent"}: ${data.text || JSON.stringify(data)}`);
+        } else {
+            console.error("Unexpected response format:", data);
+        }
     } catch (error) {
         console.error("Error fetching response:", error);
     }
