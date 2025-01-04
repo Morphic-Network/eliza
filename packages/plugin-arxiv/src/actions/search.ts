@@ -128,6 +128,14 @@ export const searchAction: Action = {
             await callback(response);
         }
 
+        // Store in memory
+        await runtime.documentsManager.createMemory({
+            agentId: runtime.agentId,
+            content: { text: response.text },
+            userId: message.userId,
+            roomId: message.roomId,
+        });
+
         return response;
     },
 };

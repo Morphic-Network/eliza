@@ -47,6 +47,14 @@ export const getPaperAction: Action = {
             };
         }
 
+        // Store in memory
+        await runtime.documentsManager.createMemory({
+            agentId: runtime.agentId,
+            content: { text: JSON.stringify(result) },
+            userId: message.userId,
+            roomId: message.roomId,
+        });
+
         return {
             success: true,
             data: result,
