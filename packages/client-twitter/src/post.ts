@@ -7,8 +7,8 @@ import {
     ModelClass,
     stringToUuid,
     UUID,
+    elizaLogger,
 } from "@elizaos/core";
-import { elizaLogger } from "@elizaos/core";
 import { ClientBase } from "./base.ts";
 import { postActionResponseFooter } from "@elizaos/core";
 import { generateTweetActions } from "@elizaos/core";
@@ -16,6 +16,66 @@ import { IImageDescriptionService, ServiceType } from "@elizaos/core";
 import { buildConversationThread } from "./utils.ts";
 import { twitterMessageHandlerTemplate } from "./interactions.ts";
 import { DEFAULT_MAX_TWEET_LENGTH } from "./environment.ts";
+
+// Local type definition for ArxivPaper
+interface ArxivPaper {
+    id: string;
+    title: string;
+    authors: string[];
+    categories: string[];
+    summary: string;
+    processed?: boolean;
+}
+
+// Define the arxivReviewTemplate if it's not imported
+const arxivReviewTemplate = `
+# Areas of Expertise
+{{knowledge}}
+
+# About {{agentName}} (@{{twitterUserName}}):
+{{bio}}
+{{lore}}
+{{topics}}
+
+{{providers}}
+
+{{characterPostExamples}}
+
+{{postDirections}}
+
+# Task: Share an exciting arXiv paper
+Task: Generate a post in the voice and style and perspective of {{agentName}} @{{twitterUserName}}.
+Write a post that is {{adjective}} about {{topic}} (without mentioning {{topic}} directly), from the perspective of {{agentName}}.
+Do not add commentary or acknowledge this request, just write the post.
+
+Paper Info:
+Title: {{paperTitle}}
+Authors: {{paperAuthors}}
+Categories: {{paperCategories}}
+Link: {{paperLink}}
+Abstract: {{paperSummary}}
+
+Guidelines:
+- Write in a conversational, engaging tone while maintaining expertise
+- Show genuine excitement about the innovations
+- Connect ideas to real-world implications, especially in AI, TEE, and blockchain
+- Make it accessible to a broad tech audience
+- Use emojis sparingly but effectively
+- Keep response under {{maxTweetLength}} characters
+- Include the paper link at the end
+- Use \\n\\n for natural paragraph breaks
+
+
+Your response should feel like an organic social media post that:
+1. Hooks readers with an interesting aspect or finding
+2. Explains why it matters in simple terms
+3. Connects to current tech trends or future implications
+4. Ends with a link to the paper
+
+Remember: You should also check the paper's revelance and importance in the fields of Agent and TEE.
+Write as if you're correspondingly excitedly sharing this with your tech-savvy followers, but with less emojis!
+You tone is better to be Britain, cause your identity is a cyber clone of Alan Turing.
+`;
 
 const twitterPostTemplate = `
 # Areas of Expertise
@@ -62,7 +122,8 @@ Actions (respond only with tags):
 Tweet:
 {{currentTweet}}
 
-# Respond with qualifying action tags only. Default to NO action unless extremely confident of relevance.` + postActionResponseFooter;
+# Respond with qualifying action tags only. Default to NO action unless extremely confident of relevance.` +
+    postActionResponseFooter;
 
 /**
  * Truncate text to fit within the Twitter character limit, ensuring it ends at a complete sentence.
@@ -98,6 +159,95 @@ function truncateToCompleteSentence(
     return hardTruncated + "...";
 }
 
+/**
+ * Generates content for a tweet about a research paper
+ * @param runtime Agent runtime instance
+ * @param paper ArXiv paper to tweet about
+ * @returns Generated tweet content
+ */
+async function generatePaperTweetContent(
+    runtime: IAgentRuntime,
+    paper: ArxivPaper
+): Promise<string> {
+    const context = composeContext({
+        state: await runtime.composeState(
+            {
+                userId: runtime.agentId,
+                roomId: stringToUuid("twitter-paper-share"),
+                agentId: runtime.agentId,
+                content: {
+                    text: paper.summary,
+                    action: "TWEET",
+                },
+            },
+            {
+                paperTitle: paper.title,
+                paperAuthors: paper.authors.join(", "),
+                paperCategories: paper.categories.join(", "),
+                paperSummary: paper.summary,
+                paperLink: paper.link,
+                maxTweetLength: DEFAULT_MAX_TWEET_LENGTH,
+            }
+        ),
+        template: arxivReviewTemplate,
+    });
+
+    return await generateText({
+        runtime,
+        context,
+        modelClass: ModelClass.SMALL,
+    });
+}
+
+/**
+ * Gets recent unprocessed papers from memory
+ * @param runtime Agent runtime instance
+ * @returns Array of unprocessed papers
+ */
+async function getRecentPapers(runtime: IAgentRuntime): Promise<ArxivPaper[]> {
+    const roomId = stringToUuid(`arxiv-papers-${runtime.agentId}`);
+    const memories = await runtime.messageManager.getMemories({
+        roomId,
+        count: 10,
+        unique: true,
+    });
+
+    return memories
+        .filter((m) => m.content.source === "arxiv" && m.content.paper)
+        .map((m) => m.content.paper as ArxivPaper)
+        .filter((p) => !p.processed);
+}
+
+/**
+ * Marks a paper as processed in memory
+ * @param runtime Agent runtime instance
+ * @param paperId Paper ID to mark as processed
+ */
+async function markPaperAsProcessed(runtime: IAgentRuntime, paperId: string) {
+    const memory = await runtime.messageManager.getMemoryById(
+        stringToUuid(paperId)
+    );
+    if (memory && memory.content.paper) {
+        const paper = memory.content.paper as ArxivPaper;
+        paper.processed = true;
+
+        // Create a new memory with the updated paper
+        await runtime.messageManager.createMemory(
+            {
+                ...memory,
+                content: {
+                    ...memory.content,
+                    paper,
+                    text: memory.content.text + "\n[PROCESSED]",
+                },
+            },
+            true
+        ); // Use unique flag to update existing memory
+
+        elizaLogger.log(`Marked paper as processed: ${paper.title}`);
+    }
+}
+
 export class TwitterPostClient {
     client: ClientBase;
     runtime: IAgentRuntime;
@@ -111,7 +261,7 @@ export class TwitterPostClient {
         this.client = client;
         this.runtime = runtime;
         this.twitterUsername = this.client.twitterConfig.TWITTER_USERNAME;
-        this.isDryRun = this.client.twitterConfig.TWITTER_DRY_RUN
+        this.isDryRun = this.client.twitterConfig.TWITTER_DRY_RUN;
 
         // Log configuration on initialization
         elizaLogger.log("Twitter Client Configuration:");
@@ -133,6 +283,10 @@ export class TwitterPostClient {
         );
         elizaLogger.log(
             `- Search Enabled: ${this.client.twitterConfig.TWITTER_SEARCH_ENABLE ? "enabled" : "disabled"}`
+        );
+
+        elizaLogger.log(
+            `- Paper Tweet Ratio: ${(this.client.twitterConfig.PAPER_TWEET_RATIO * 100).toFixed(0)}%`
         );
 
         const targetUsers = this.client.twitterConfig.TWITTER_TARGET_USERS;
@@ -188,8 +342,9 @@ export class TwitterPostClient {
                             `Next action processing scheduled in ${actionInterval} minutes`
                         );
                         // Wait for the full interval before next processing
-                        await new Promise((resolve) =>
-                            setTimeout(resolve, actionInterval * 60 * 1000) // now in minutes
+                        await new Promise(
+                            (resolve) =>
+                                setTimeout(resolve, actionInterval * 60 * 1000) // now in minutes
                         );
                     }
                 } catch (error) {
@@ -208,14 +363,10 @@ export class TwitterPostClient {
         }
 
         // Only start tweet generation loop if not in dry run mode
-        if (!this.isDryRun) {
-            generateNewTweetLoop();
-            elizaLogger.log("Tweet generation loop started");
-        } else {
-            elizaLogger.log("Tweet generation loop disabled (dry run mode)");
-        }
+        generateNewTweetLoop();
+        elizaLogger.log("Tweet generation loop started");
 
-        if (this.client.twitterConfig.ENABLE_ACTION_PROCESSING && !this.isDryRun) {
+        if (this.client.twitterConfig.ENABLE_ACTION_PROCESSING) {
             processActionsLoop().catch((error) => {
                 elizaLogger.error(
                     "Fatal error in process actions loop:",
@@ -223,15 +374,7 @@ export class TwitterPostClient {
                 );
             });
         } else {
-            if (this.isDryRun) {
-                elizaLogger.log(
-                    "Action processing loop disabled (dry run mode)"
-                );
-            } else {
-                elizaLogger.log(
-                    "Action processing loop disabled by configuration"
-                );
-            }
+            elizaLogger.log("Action processing loop disabled by configuration");
         }
     }
 
@@ -398,7 +541,7 @@ export class TwitterPostClient {
     }
 
     /**
-     * Generates and posts a new tweet. If isDryRun is true, only logs what would have been posted.
+     * Generates and posts a new tweet, either about personal insights or recent papers
      */
     private async generateNewTweet() {
         elizaLogger.log("Generating new tweet");
@@ -414,37 +557,83 @@ export class TwitterPostClient {
                 "twitter"
             );
 
-            const topics = this.runtime.character.topics.join(", ");
-
-            const state = await this.runtime.composeState(
-                {
-                    userId: this.runtime.agentId,
-                    roomId: roomId,
-                    agentId: this.runtime.agentId,
-                    content: {
-                        text: topics || "",
-                        action: "TWEET",
-                    },
-                },
-                {
-                    twitterUserName: this.client.profile.username,
-                }
+            // Determine tweet type based on configuration and state
+            let shouldTweetPaper = false;
+            const lastTweetType = await this.runtime.cacheManager.get<string>(
+                "twitter/lastTweetType"
             );
 
-            const context = composeContext({
-                state,
-                template:
-                    this.runtime.character.templates?.twitterPostTemplate ||
-                    twitterPostTemplate,
-            });
+            // Get paper tweet ratio from config
+            const paperTweetRatio = this.client.twitterConfig.PAPER_TWEET_RATIO;
 
-            elizaLogger.debug("generate post prompt:\n" + context);
+            if (!lastTweetType) {
+                // First tweet, use configured ratio
+                shouldTweetPaper = Math.random() < paperTweetRatio;
+            } else {
+                // Alternate between paper and personal tweets
+                shouldTweetPaper = lastTweetType === "personal";
+            }
 
-            const newTweetContent = await generateText({
-                runtime: this.runtime,
-                context,
-                modelClass: ModelClass.SMALL,
-            });
+            let newTweetContent: string;
+
+            if (shouldTweetPaper) {
+                // Get recent papers and choose one randomly
+                const papers = await getRecentPapers(this.runtime);
+                if (papers.length > 0) {
+                    const paper =
+                        papers[Math.floor(Math.random() * papers.length)];
+                    newTweetContent = await generatePaperTweetContent(
+                        this.runtime,
+                        paper
+                    );
+                    await markPaperAsProcessed(this.runtime, paper.id);
+                    await this.runtime.cacheManager.set(
+                        "twitter/lastTweetType",
+                        "paper"
+                    );
+                } else {
+                    // Fallback to personal insight if no papers available
+                    shouldTweetPaper = false;
+                }
+            }
+
+            if (!shouldTweetPaper) {
+                // Generate personal insight tweet
+                const topics = this.runtime.character.topics.join(", ");
+                const state = await this.runtime.composeState(
+                    {
+                        userId: this.runtime.agentId,
+                        roomId: roomId,
+                        agentId: this.runtime.agentId,
+                        content: {
+                            text: topics || "",
+                            action: "TWEET",
+                        },
+                    },
+                    {
+                        twitterUserName: this.client.profile.username,
+                    }
+                );
+
+                const context = composeContext({
+                    state,
+                    template:
+                        this.runtime.character.templates?.twitterPostTemplate ||
+                        twitterPostTemplate,
+                });
+
+                newTweetContent = await generateText({
+                    runtime: this.runtime,
+                    context,
+                    modelClass: ModelClass.SMALL,
+                });
+
+                // Update last tweet type
+                await this.runtime.cacheManager.set(
+                    "twitter/lastTweetType",
+                    "personal"
+                );
+            }
 
             // First attempt to clean content
             let cleanedContent = "";
@@ -480,7 +669,7 @@ export class TwitterPostClient {
             }
 
             // Truncate the content to the maximum tweet length specified in the environment settings, ensuring the truncation respects sentence boundaries.
-            const maxTweetLength = this.client.twitterConfig.MAX_TWEET_LENGTH
+            const maxTweetLength = this.client.twitterConfig.MAX_TWEET_LENGTH;
             if (maxTweetLength) {
                 cleanedContent = truncateToCompleteSentence(
                     cleanedContent,

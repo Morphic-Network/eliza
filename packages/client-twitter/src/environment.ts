@@ -1,7 +1,7 @@
 import { parseBooleanFromText, IAgentRuntime } from "@elizaos/core";
 import { z, ZodError } from "zod";
 
-export const DEFAULT_MAX_TWEET_LENGTH = 280;
+export const DEFAULT_MAX_TWEET_LENGTH = 1000;
 
 const twitterUsernameSchema = z
     .string()
@@ -61,6 +61,7 @@ export const twitterEnvSchema = z.object({
     ACTION_INTERVAL: z.number().int(),
     POST_IMMEDIATELY: z.boolean(),
     TWITTER_SPACES_ENABLE: z.boolean().default(false),
+    PAPER_TWEET_RATIO: z.number().min(0).max(1).default(0.5),
 });
 
 export type TwitterConfig = z.infer<typeof twitterEnvSchema>;
@@ -86,6 +87,15 @@ function safeParseInt(
     if (!value) return defaultValue;
     const parsed = parseInt(value, 10);
     return isNaN(parsed) ? defaultValue : Math.max(1, parsed);
+}
+
+function safeParseFloat(
+    value: string | undefined | null,
+    defaultValue: number
+): number {
+    if (!value) return defaultValue;
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? defaultValue : Math.max(0, Math.min(1, parsed));
 }
 
 /**
@@ -199,6 +209,12 @@ export async function validateTwitterConfig(
                     runtime.getSetting("TWITTER_SPACES_ENABLE") ||
                         process.env.TWITTER_SPACES_ENABLE
                 ) ?? false,
+
+            PAPER_TWEET_RATIO: safeParseFloat(
+                runtime.getSetting("PAPER_TWEET_RATIO") ||
+                    process.env.PAPER_TWEET_RATIO,
+                0.5
+            ),
         };
 
         return twitterEnvSchema.parse(twitterConfig);
