@@ -1,4 +1,4 @@
-import { elizaLogger } from "@elizaos/core";
+import { elizaLogger, ServiceType } from "@elizaos/core";
 import {
     Action,
     HandlerCallback,
@@ -6,7 +6,10 @@ import {
     Memory,
     Plugin,
     State,
+    Service,
 } from "@elizaos/core";
+import { ITextGenerationService } from "@elizaos/core";
+import { stringToUuid } from "@elizaos/core";
 import { generateWebSearch } from "@elizaos/core";
 import { SearchResult } from "@elizaos/core";
 import { encodingForModel, TiktokenModel } from "js-tiktoken";
@@ -30,6 +33,135 @@ function MaxTokens(
         return data.slice(0, maxTokens);
     }
     return data;
+}
+
+class WebSearchUpdateService implements Service {
+    private runtime: IAgentRuntime | null = null;
+    private updateInterval: NodeJS.Timeout | null = null;
+    private config: {
+        categories: string[];
+        maxResults: number;
+        checkInterval: number;
+    };
+
+    constructor() {
+        this.config = {
+            categories: [],
+            maxResults: 3,
+            checkInterval: 18000000, // 5 hours default
+        };
+    }
+
+    static async initialize(runtime: IAgentRuntime): Promise<void> {
+        const service = new WebSearchUpdateService();
+        await service.initialize(runtime);
+    }
+
+    static get serviceType(): ServiceType {
+        return ServiceType.TEXT_GENERATION;
+    }
+
+    get serviceType(): ServiceType {
+        return ServiceType.TEXT_GENERATION;
+    }
+
+
+    async initialize(runtime: IAgentRuntime): Promise<void> {
+        this.runtime = runtime;
+        this.config = {
+            categories: runtime.character.settings?.["webSearch"]?.categories || [
+                "ai",
+                "nlp",
+                "eliza",
+            ],
+            maxResults:
+                runtime.character.settings?.["webSearch"]?.maxPapersPerCategory ||
+                3,
+            checkInterval:
+                runtime.character.settings?.["webSearch"]?.updateIntervalMs ||
+                18000000,
+        };
+        await this.start();
+    }
+
+    async start(): Promise<void> {
+        await this.updateWebSearchCache();
+        this.updateInterval = setInterval(() => {
+            this.updateWebSearchCache().catch((error) => {
+                elizaLogger.error(
+                    "Error in web search update interval:",
+                    error
+                );
+            });
+        }, this.config.checkInterval);
+
+        elizaLogger.log(
+            `Web search update service started with categories: ${this.config.categories.join(", ")}`
+        );
+    }
+
+    async updateWebSearchCache() {
+        const roomId = `webresearch-${this.runtime.agentId}`;
+        await this.runtime.ensureRoomExists(stringToUuid(roomId));
+
+        const results: SearchResult[] = [];
+        for (const category of this.config.categories) {
+            try {
+                const ws = await generateWebSearch(
+                    `What is the latest news about ${category}?`,
+                    this.runtime
+                );
+                for (const result of ws.results.slice(0, this.config.maxResults)) {
+                    const existingMemory =
+                        await this.runtime.messageManager.getMemoryById(
+                            stringToUuid(result.title)
+                        );
+                    if (!existingMemory) {
+                        await this.storeWebSearchInMemory(result, roomId);
+                        elizaLogger.log(`Stored web search: ${result.title}`);
+                    }
+                }
+            } catch (error) {
+                elizaLogger.error(
+                    `Error fetching web search results for category ${category}:`,
+                    error
+                );
+            }
+        }
+    }
+
+    private async storeWebSearchInMemory(
+        searchResult: SearchResult,
+        roomId: string
+    ) {
+        if (!this.runtime) {
+            elizaLogger.error("Runtime not initialized");
+            return;
+        }
+
+        const textContent = `Title: ${searchResult.title}\n Content: ${searchResult.content}\n URL: ${searchResult.url}\n Published Date: ${searchResult.publishedDate}`;
+        const memory: Memory = {
+            id: stringToUuid(searchResult.title),
+            userId: this.runtime.agentId,
+            agentId: this.runtime.agentId,
+            roomId: stringToUuid(roomId),
+            content: {
+                text: textContent,
+                source: "websearch",
+                searchResult,
+            },
+            createdAt: Date.now(),
+        };
+        await this.runtime.messageManager.createMemory(memory);
+        elizaLogger.log(`Stored web search in memory: ${searchResult.title}`);
+    }
+
+    async stop(): Promise<void> {
+        if (this.updateInterval) {
+            clearInterval(this.updateInterval);
+            this.updateInterval = null;
+        }
+    }
 }
 
 const webSearch: Action = {
@@ -206,6 +338,7 @@ export const webSearchPlugin: Plugin = {
     actions: [webSearch],
     evaluators: [],
     providers: [],
+    services: [WebSearchUpdateService],
 };
 
 export default webSearchPlugin;
