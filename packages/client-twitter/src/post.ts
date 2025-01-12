@@ -48,12 +48,7 @@ Task: Generate a post in the voice and style and perspective of {{agentName}} @{
 Write a post that is {{adjective}} about {{topic}} (without mentioning {{topic}} directly), from the perspective of {{agentName}}.
 Do not add commentary or acknowledge this request, just write the post.
 
-Paper Info:
-Title: {{paperTitle}}
-Authors: {{paperAuthors}}
-Categories: {{paperCategories}}
-Link: {{paperLink}}
-Abstract: {{paperSummary}}
+Paper Info: {{paperTitle}}, {{paperAuthors}}, {{paperCategories}}, {{paperSummary}}
 
 Guidelines:
 - Write in a conversational, engaging tone while maintaining expertise
@@ -185,7 +180,7 @@ async function generatePaperTweetContent(
                 paperAuthors: paper.authors.join(", "),
                 paperCategories: paper.categories.join(", "),
                 paperSummary: paper.summary,
-                paperLink: paper.link,
+                paperLink: paper.id,
                 maxTweetLength: DEFAULT_MAX_TWEET_LENGTH,
             }
         ),

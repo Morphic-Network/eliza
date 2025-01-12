@@ -1,13 +1,18 @@
 import {
     Action,
     IAgentRuntime,
+    generateText,
+    ModelClass,
     Memory,
     HandlerCallback,
     State,
     elizaLogger,
+    stringToUuid,
+    getEmbeddingZeroVector,
 } from "@elizaos/core";
 import axios from "axios";
 import { XMLParser } from "fast-xml-parser";
+import { createResourceTemplate } from "../templates";
 
 const parser = new XMLParser();
 
@@ -26,9 +31,11 @@ export const searchArxivAction: Action = {
         callback: HandlerCallback
     ) => {
         try {
-            const query = encodeURIComponent(message.content.text);
+            const arxivSearchQuery = message.content.text;
+            elizaLogger.log("arxiv search prompt received:", arxivSearchQuery);
+
             const baseUrl = "http://export.arxiv.org/api/query";
-            const searchUrl = `${baseUrl}?search_query=all:${query}&start=0&max_results=10`;
+            const searchUrl = `${baseUrl}?search_query=all:${arxivSearchQuery}&start=0&max_results=3`;
 
             const response = await axios.get(searchUrl);
             const result = parser.parse(response.data);
@@ -42,7 +49,7 @@ export const searchArxivAction: Action = {
                 ? result.feed.entry
                 : [result.feed.entry];
 
-            const formattedResponse = papers
+            const formattedPapers = papers
                 .map(
                     (paper) =>
                         `Title: ${paper.title}\n` +
@@ -53,21 +60,39 @@ export const searchArxivAction: Action = {
                 )
                 .join("\n---\n\n");
 
-            // Store in memory manager instead of using non-existent storeMemory
-            await runtime.messageManager.createMemory({
-                id: runtime.agentId,
-                userId: message.userId,
+            // generate summary
+            const summaryPrompt = `Please summarize the following ${papers.length} arXiv papers: ${formattedPapers}
+
+            A short paragraph of all papers first, then a concise overview of the main research themes, breakthough, and potential implications in plain text. No markdown please.
+
+            Keep the summary clear and concise`;
+
+            const summarizedPapers = await generateText({
+                runtime,
+                context: summaryPrompt,
+                modelClass: ModelClass.SMALL,
+            });
+
+            // persist papers if needed to memory/knowledge
+            const memory = {
+                id: stringToUuid(arxivSearchQuery),
+                userId: runtime.agentId,
                 agentId: runtime.agentId,
                 roomId: message.roomId,
                 content: {
-                    text: formattedResponse,
+                    text: formattedPapers,
                     source: "arxiv",
                 },
-            });
+                type: "arxiv",
+                timestamp: new Date().toISOString(),
+                embedding: getEmbeddingZeroVector(),
+            };
+
+            await runtime.messageManager.createMemory(memory);
 
             callback(
                 {
-                    text: `Found ${papers.length} papers:\n\n${formattedResponse}`,
+                    text: `Found ${papers.length} papers:\n\n${summarizedPapers}`,
                 },
                 []
             );
