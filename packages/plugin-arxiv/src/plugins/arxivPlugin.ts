@@ -9,6 +9,7 @@ import {
     ITextGenerationService,
 } from "@elizaos/core";
 import { searchArxivAction } from "../actions/searchArxivAction";
+import { generateStormAction } from "../actions/generateStormAction";
 import { arxivProvider } from "../providers/arxivProvider";
 import { ArxivPaper } from "../types";
 import axios from "axios";
@@ -206,7 +207,7 @@ class ArxivUpdateService implements Service {
 export const arxivPlugin: Plugin = {
     name: "arxiv",
     description: "Plugin for searching and analyzing arXiv papers",
-    actions: [searchArxivAction],
+    actions: [searchArxivAction, generateStormAction],
     providers: [arxivProvider],
     evaluators: [],
     services: [ArxivUpdateService],
